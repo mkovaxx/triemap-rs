@@ -26,28 +26,28 @@ pub fn trie_map(attr: TokenStream, item: TokenStream) -> TokenStream {
         enum #tm_name<V> {
             Empty,
             Single {
-                // TODO
+                key: #key_name,
+                value: V,
             },
-            Multiple {
+            Multi {
                 // TODO
-                v: V,
             },
         }
 
         impl<V> #tm_name<V> {
-            fn new() -> Self {
+            pub fn new() -> Self {
                 Self::Empty
             }
 
-            fn single(key: #key_name, value: V) -> Self {
+            pub fn single(key: #key_name, value: V) -> Self {
                 todo!()
             }
 
-            fn get(key: &#key_name) -> Option<&V> {
+            pub fn get(&self, key: &#key_name) -> Option<&V> {
                 todo!()
             }
 
-            fn insert(key: #key_name, value: V) {
+            pub fn insert(&mut self, key: #key_name, value: V) {
                 todo!()
             }
         }
