@@ -4,11 +4,13 @@ use triemap::trie_map;
 
 type UsizeMap<V> = HashMap<usize, V>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[trie_map(Expr -> ExprMap, usize -> UsizeMap)]
 enum Expr {
+    Zero,
     Var(usize),
     App(Box<Expr>, Box<Expr>),
+    Def(Box<Expr>),
 }
 
 #[test]
