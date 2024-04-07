@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use quote::{format_ident, quote};
+use proc_macro2::Span;
+use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    AngleBracketedGenericArguments, Data, DeriveInput, Fields, GenericArgument, Ident,
-    PathArguments, Result, Token, Type,
+    spanned::Spanned,
+    Data, DeriveInput, Error, Fields, GenericArgument, Ident, PathArguments, Result, Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -16,51 +17,63 @@ pub fn trie_map(
 ) -> proc_macro::TokenStream {
     let args = parse_macro_input!(attr as Args);
     let key = parse_macro_input!(item as DeriveInput);
+    let result = trie_map_impl(args, key);
+    result.unwrap_or_else(|err| err.to_compile_error().into())
+}
 
+fn trie_map_impl(args: Args, key: DeriveInput) -> Result<proc_macro::TokenStream> {
     let key_name = &key.ident;
-    let wrapper_entry = args.type_map.get(key_name).expect(&format!(
-        "the type mapping must contain an entry for {}",
-        key_name,
-    ));
+    let wrapper_entry = match args.type_map.get(key_name) {
+        Some(entry) => entry,
+        None => {
+            return Err(Error::new(
+                args.span,
+                format!("the type mapping must contain an entry for {}", key_name,),
+            ))
+        }
+    };
     let wrapper_name = &wrapper_entry.name;
     let inner_name = format_ident!("Many_{}", wrapper_name);
 
-    let key_variants = get_key_variants(&key);
-    let inner_fields: Vec<InnerField> = key_variants
-        .into_iter()
-        .map(|key_variant| generate_inner_field(key_name, &key_variant, &args.type_map))
-        .collect();
+    let key_variants = get_key_variants(&key)?;
 
-    let wrapper = generate_wrapper(wrapper_name, &inner_name, key_name);
-    let inner = generate_inner(&inner_name, wrapper_name, &inner_fields);
+    let mut inner_fields: Vec<InnerField> = vec![];
+    for key_variant in key_variants {
+        let inner_field = generate_inner_field(key_name, &key_variant, &args.type_map)?;
+        inner_fields.push(inner_field);
+    }
 
-    quote! {
+    let wrapper = generate_wrapper(key_name, wrapper_name, &inner_name);
+    let inner = generate_inner(key_name, wrapper_name, &inner_name, &inner_fields);
+
+    Ok(quote! {
         #key
 
         #wrapper
 
         #inner
     }
-    .into()
+    .into())
 }
 
-fn get_key_variants(key: &DeriveInput) -> Vec<KeyVariant> {
+fn get_key_variants(key: &DeriveInput) -> Result<Vec<KeyVariant>> {
     match &key.data {
-        Data::Struct(_) => panic!("struct types are not supported yet"),
-        Data::Enum(enum_data) => enum_data
+        Data::Struct(_) => Err(Error::new(key.span(), "struct types are not yet supported")),
+        Data::Enum(enum_data) => Ok(enum_data
             .variants
             .iter()
             .map(|variant| KeyVariant {
                 name: Some(variant.ident.clone()),
                 fields: variant.fields.clone(),
             })
-            .collect(),
-        Data::Union(_) => panic!("union types are not supported"),
+            .collect()),
+        Data::Union(_) => Err(Error::new(key.span(), "union types are not supported")),
     }
 }
 
 struct Args {
     type_map: TypeMap,
+    span: Span,
 }
 
 type TypeMap = BTreeMap<Ident, TypeMapEntry>;
@@ -85,7 +98,10 @@ impl Parse for Args {
                 )
             })
             .collect();
-        Ok(Args { type_map })
+        Ok(Args {
+            type_map,
+            span: input.span(),
+        })
     }
 }
 
@@ -110,9 +126,9 @@ impl Parse for TypeMapArg {
 }
 
 fn generate_wrapper(
+    key_name: &Ident,
     wrapper_name: &Ident,
     inner_name: &Ident,
-    key_name: &Ident,
 ) -> proc_macro2::TokenStream {
     parse_quote! {
         pub enum #wrapper_name<V> {
@@ -126,7 +142,6 @@ fn generate_wrapper(
                 Self::Empty
             }
 
-            /*
             pub fn get(&self, key: &#key_name) -> Option<&V> {
                 match self {
                     Self::Empty => None,
@@ -220,7 +235,6 @@ fn generate_wrapper(
                     },
                 }
             }
-            */
         }
     }
 }
@@ -237,8 +251,9 @@ struct InnerField {
 }
 
 fn generate_inner(
-    inner_name: &Ident,
+    key_name: &Ident,
     wrapper_name: &Ident,
+    inner_name: &Ident,
     inner_fields: &Vec<InnerField>,
 ) -> proc_macro2::TokenStream {
     let typed_fields: Vec<proc_macro2::TokenStream> = inner_fields
@@ -263,30 +278,63 @@ fn generate_inner(
         struct #inner_name<V> {
             #(#typed_fields)*
         }
+
+        impl<V> #inner_name<V> {
+            pub fn new() -> Self {
+                todo!()
+            }
+
+            pub fn get(&self, key: &#key_name) -> Option<&V> {
+                todo!()
+            }
+
+            pub fn insert(&mut self, key: #key_name, value: V) {
+                todo!()
+            }
+
+            pub fn remove(&mut self, key: &#key_name) -> Option<V> {
+                todo!()
+            }
+
+            pub fn merge_with<F>(&mut self, that: Self, func: &mut F)
+            where
+                F: FnMut(&mut V, V),
+            {
+                todo!()
+            }
+        }
     }
 }
 
-fn generate_inner_field(key_name: &Ident, variant: &KeyVariant, type_map: &TypeMap) -> InnerField {
+fn generate_inner_field(
+    key_name: &Ident,
+    variant: &KeyVariant,
+    type_map: &TypeMap,
+) -> Result<InnerField> {
     let fields: Vec<_> = variant.fields.iter().collect();
     if fields.is_empty() {
         // unit variant
-        InnerField {
+        Ok(InnerField {
             name: variant.name.clone().unwrap_or(key_name.clone()),
             map_ty: parse_quote!(Option<V>),
             store_ty: None,
-        }
+        })
     } else {
         // TODO: revisit this part because it is wrong :)
 
         // variant has at least one field
         let first_field = fields[0];
-        let field_ty_name = get_type_name(&first_field.ty);
+        let field_ty_name = get_type_name(&first_field.ty)?;
 
-        let fallback = TypeMapEntry {
-            name: format_ident!("UNKNOWN_{}", field_ty_name),
-            is_indirect: false,
+        let entry = match type_map.get(&field_ty_name) {
+            Some(entry) => entry,
+            None => {
+                return Err(Error::new(
+                    first_field.span(),
+                    format!("No entry for {:#?} in the type mapping", first_field.ident),
+                ))
+            }
         };
-        let entry = type_map.get(&field_ty_name).unwrap_or(&fallback);
         let map_name = &entry.name;
 
         let value_ty: proc_macro2::TokenStream = if fields.len() == 1 {
@@ -296,31 +344,23 @@ fn generate_inner_field(key_name: &Ident, variant: &KeyVariant, type_map: &TypeM
         };
 
         if !entry.is_indirect {
-            InnerField {
+            Ok(InnerField {
                 name: variant.name.clone().unwrap_or(key_name.clone()),
                 map_ty: parse_quote!(#map_name<#value_ty>),
                 store_ty: None,
-            }
+            })
         } else {
-            InnerField {
+            Ok(InnerField {
                 name: variant.name.clone().unwrap_or(key_name.clone()),
                 map_ty: parse_quote!(#map_name<slotmap::DefaultKey>),
                 store_ty: Some(parse_quote!(slotmap::SlotMap<slotmap::DefaultKey, #value_ty>)),
-            }
+            })
         }
     }
 }
 
-fn get_type_name(ty: &Type) -> Ident {
+fn get_type_name(ty: &Type) -> Result<Ident> {
     match ty {
-        Type::Array(_) => format_ident!("Array"),
-        Type::BareFn(_) => format_ident!("BareFn"),
-        Type::Group(_) => format_ident!("Group"),
-        Type::ImplTrait(_) => format_ident!("ImplTrait"),
-        Type::Infer(_) => format_ident!("Infer"),
-        Type::Macro(_) => format_ident!("Macro"),
-        Type::Never(_) => format_ident!("Never"),
-        Type::Paren(_) => format_ident!("Paren"),
         Type::Path(path) => {
             let last_segment = path.path.segments.last().unwrap();
             if last_segment.ident == format_ident!("Box") {
@@ -330,21 +370,30 @@ fn get_type_name(ty: &Type) -> Ident {
                     if let [GenericArgument::Type(ty)] = &args[..] {
                         get_type_name(ty)
                     } else {
-                        format_ident!("WRONG_ARG_TYPE")
+                        Err(Error::new(
+                            ty.span(),
+                            format!(
+                                "Expected a type, got {}",
+                                last_segment.arguments.to_token_stream()
+                            ),
+                        ))
                     }
                 } else {
-                    format_ident!("WRONG_ARGS")
+                    Err(Error::new(
+                        ty.span(),
+                        format!(
+                            "Expected <GENERIC_ARGS>, got {}",
+                            last_segment.arguments.to_token_stream()
+                        ),
+                    ))
                 }
             } else {
-                last_segment.ident.clone()
+                Ok(last_segment.ident.clone())
             }
         }
-        Type::Ptr(_) => format_ident!("Ptr"),
-        Type::Reference(_) => format_ident!("Reference"),
-        Type::Slice(_) => format_ident!("Slice"),
-        Type::TraitObject(_) => format_ident!("TraitObject"),
-        Type::Tuple(_) => format_ident!("Tuple"),
-        Type::Verbatim(_) => format_ident!("Verbatim"),
-        _ => format_ident!("UNKNOWN"),
+        _ => Err(Error::new(
+            ty.span(),
+            format!("Not supported here: {}", ty.into_token_stream()),
+        )),
     }
 }
