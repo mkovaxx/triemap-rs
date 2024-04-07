@@ -5,11 +5,11 @@ use triemap::trie_map;
 type UsizeMap<V> = HashMap<usize, V>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[trie_map(Expr -> ExprMap, usize -> UsizeMap)]
-enum Expr {
+#[trie_map(Expr -> *ExprMap, usize -> UsizeMap)]
+pub enum Expr {
     Zero,
     Var(usize),
-    App(Box<Expr>, Box<Expr>),
+    App(Box<Expr>, usize, Box<Expr>),
     Def(Box<Expr>),
 }
 
@@ -22,7 +22,7 @@ fn test_map_type_exists() {
 fn test_insert_then_get() {
     let mut tm: ExprMap<char> = ExprMap::new();
 
-    let key = Expr::App(Expr::Var(0).into(), Expr::Var(1).into());
+    let key = Expr::App(Expr::Var(0).into(), 42, Expr::Var(1).into());
     let value = 'v';
     tm.insert(key.clone(), value);
 

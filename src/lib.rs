@@ -7,7 +7,7 @@ use syn::{
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
     spanned::Spanned,
-    Data, DeriveInput, Error, Fields, GenericArgument, Ident, PathArguments, Result, Token, Type,
+    Data, DeriveInput, Error, GenericArgument, Ident, PathArguments, Result, Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -35,16 +35,10 @@ fn trie_map_impl(args: Args, key: DeriveInput) -> Result<proc_macro::TokenStream
     let wrapper_name = &wrapper_entry.name;
     let inner_name = format_ident!("Many_{}", wrapper_name);
 
-    let key_variants = get_key_variants(&key)?;
-
-    let mut inner_fields: Vec<InnerField> = vec![];
-    for key_variant in key_variants {
-        let inner_field = generate_inner_field(key_name, &key_variant, &args.type_map)?;
-        inner_fields.push(inner_field);
-    }
+    let key_variants = get_key_variants(&key, &args.type_map)?;
 
     let wrapper = generate_wrapper(key_name, wrapper_name, &inner_name);
-    let inner = generate_inner(key_name, wrapper_name, &inner_name, &inner_fields);
+    let inner = generate_inner(key_name, key_variants, &inner_name);
 
     Ok(quote! {
         #key
@@ -56,17 +50,40 @@ fn trie_map_impl(args: Args, key: DeriveInput) -> Result<proc_macro::TokenStream
     .into())
 }
 
-fn get_key_variants(key: &DeriveInput) -> Result<Vec<KeyVariant>> {
+fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVariant>> {
     match &key.data {
         Data::Struct(_) => Err(Error::new(key.span(), "struct types are not yet supported")),
-        Data::Enum(enum_data) => Ok(enum_data
-            .variants
-            .iter()
-            .map(|variant| KeyVariant {
-                name: Some(variant.ident.clone()),
-                fields: variant.fields.clone(),
-            })
-            .collect()),
+        Data::Enum(enum_data) => {
+            let mut key_variants = vec![];
+            for variant in &enum_data.variants {
+                let mut fields = vec![];
+                for field in &variant.fields {
+                    let field_ty_name = get_type_name(&field.ty)?;
+                    let entry = match type_map.get(&field_ty_name) {
+                        Some(entry) => entry,
+                        None => {
+                            return Err(Error::new(
+                                field.ty.span(),
+                                format!(
+                                    "No entry for `{}` in the type mapping",
+                                    field.ty.to_token_stream(),
+                                ),
+                            ))
+                        }
+                    };
+                    fields.push(KeyVariantField {
+                        name: field.ident.clone(),
+                        map_ty: entry.name.clone(),
+                        is_map_ty_indirect: entry.is_indirect,
+                    });
+                }
+                key_variants.push(KeyVariant {
+                    name: Some(variant.ident.clone()),
+                    fields,
+                });
+            }
+            Ok(key_variants)
+        }
         Data::Union(_) => Err(Error::new(key.span(), "union types are not supported")),
     }
 }
@@ -240,37 +257,25 @@ fn generate_wrapper(
 }
 
 struct KeyVariant {
+    // We treat a struct as an enum with a single variant that has no name
     name: Option<Ident>,
-    fields: Fields,
+    fields: Vec<KeyVariantField>,
 }
 
-struct InnerField {
-    name: Ident,
-    map_ty: proc_macro2::TokenStream,
-    store_ty: Option<proc_macro2::TokenStream>,
+struct KeyVariantField {
+    name: Option<Ident>,
+    map_ty: Ident,
+    is_map_ty_indirect: bool,
 }
 
 fn generate_inner(
     key_name: &Ident,
-    wrapper_name: &Ident,
+    variants: Vec<KeyVariant>,
     inner_name: &Ident,
-    inner_fields: &Vec<InnerField>,
 ) -> proc_macro2::TokenStream {
-    let typed_fields: Vec<proc_macro2::TokenStream> = inner_fields
+    let typed_fields: Vec<proc_macro2::TokenStream> = variants
         .iter()
-        .map(|field| {
-            let map_ty = &field.map_ty;
-            let map_name = format_ident!("map_{}", field.name);
-            let store_name = format_ident!("store_{}", field.name);
-            if let Some(store_ty) = &field.store_ty {
-                parse_quote! {
-                    #map_name: #map_ty,
-                    #store_name: #store_ty,
-                }
-            } else {
-                parse_quote!(#map_name: #map_ty,)
-            }
-        })
+        .map(|variant| generate_variant_map_field(key_name, variant))
         .collect();
 
     parse_quote! {
@@ -306,58 +311,35 @@ fn generate_inner(
     }
 }
 
-fn generate_inner_field(
-    key_name: &Ident,
-    variant: &KeyVariant,
-    type_map: &TypeMap,
-) -> Result<InnerField> {
-    let fields: Vec<_> = variant.fields.iter().collect();
-    if fields.is_empty() {
+fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_macro2::TokenStream {
+    let field_name = format_ident!("map_{}", variant.name.as_ref().unwrap_or(key_name));
+    if variant.fields.is_empty() {
         // unit variant
-        Ok(InnerField {
-            name: variant.name.clone().unwrap_or(key_name.clone()),
-            map_ty: parse_quote!(Option<V>),
-            store_ty: None,
-        })
+        quote! {
+            #field_name: Option<V>,
+        }
     } else {
-        // TODO: revisit this part because it is wrong :)
-
-        // variant has at least one field
-        let first_field = fields[0];
-        let field_ty_name = get_type_name(&first_field.ty)?;
-
-        let entry = match type_map.get(&field_ty_name) {
-            Some(entry) => entry,
-            None => {
-                return Err(Error::new(
-                    first_field.span(),
-                    format!(
-                        "No entry for `{}` in the type mapping",
-                        first_field.ty.to_token_stream()
-                    ),
-                ))
-            }
-        };
-        let map_name = &entry.name;
-
-        let value_ty: proc_macro2::TokenStream = if fields.len() == 1 {
-            parse_quote!(V)
-        } else {
-            parse_quote!(#map_name<V>)
-        };
-
-        if !entry.is_indirect {
-            Ok(InnerField {
-                name: variant.name.clone().unwrap_or(key_name.clone()),
-                map_ty: parse_quote!(#map_name<#value_ty>),
-                store_ty: None,
-            })
-        } else {
-            Ok(InnerField {
-                name: variant.name.clone().unwrap_or(key_name.clone()),
-                map_ty: parse_quote!(#map_name<slotmap::DefaultKey>),
-                store_ty: Some(parse_quote!(slotmap::SlotMap<slotmap::DefaultKey, #value_ty>)),
-            })
+        // variant has at least one payload field
+        let mut field_ty = quote!(V);
+        let mut is_indirect = false;
+        for field in variant.fields.iter().rev() {
+            let map_ty = &field.map_ty;
+            field_ty = if field.is_map_ty_indirect && is_indirect {
+                // when indirection is required, we use this other pattern
+                quote! {
+                    (
+                        #map_ty<slotmap::DefaultKey>,
+                        slotmap::SlotMap<slotmap::DefaultKey, #field_ty>,
+                    )
+                }
+            } else {
+                // this is the simply nested case
+                quote!(#map_ty<#field_ty>)
+            };
+            is_indirect |= field.is_map_ty_indirect;
+        }
+        quote! {
+            #field_name: #field_ty,
         }
     }
 }
