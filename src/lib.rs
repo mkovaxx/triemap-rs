@@ -57,6 +57,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
             let mut key_variants = vec![];
             for variant in &enum_data.variants {
                 let mut fields = vec![];
+
                 for field in &variant.fields {
                     let field_ty_name = get_type_name(&field.ty)?;
                     let entry = match type_map.get(&field_ty_name) {
@@ -77,6 +78,18 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
                         is_map_ty_indirect: entry.is_indirect,
                     });
                 }
+
+                // infer field indirection requirements
+                // a field is indirect if
+                //     - its own type is indirect, and
+                //     - it has any field after it whose type is indirect
+                let mut has_nested_indirect = false;
+                for field in fields.iter_mut().rev() {
+                    let tmp = field.is_map_ty_indirect;
+                    field.is_map_ty_indirect &= has_nested_indirect;
+                    has_nested_indirect |= tmp;
+                }
+
                 key_variants.push(KeyVariant {
                     name: Some(variant.ident.clone()),
                     fields,
@@ -319,10 +332,9 @@ fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_ma
     } else {
         // variant has at least one payload field
         let mut field_ty = quote!(V);
-        let mut is_indirect = false;
         for field in variant.fields.iter().rev() {
             let map_ty = &field.map_ty;
-            field_ty = if field.is_map_ty_indirect && is_indirect {
+            field_ty = if field.is_map_ty_indirect {
                 // when indirection is required, we use this other pattern
                 quote! {
                     (
@@ -334,7 +346,6 @@ fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_ma
                 // this is the simply nested case
                 quote!(#map_ty<#field_ty>)
             };
-            is_indirect |= field.is_map_ty_indirect;
         }
         field_ty
     };
