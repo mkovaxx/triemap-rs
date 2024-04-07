@@ -331,7 +331,10 @@ fn generate_inner_field(
             None => {
                 return Err(Error::new(
                     first_field.span(),
-                    format!("No entry for {:#?} in the type mapping", first_field.ident),
+                    format!(
+                        "No entry for `{}` in the type mapping",
+                        first_field.ty.to_token_stream()
+                    ),
                 ))
             }
         };
@@ -373,7 +376,7 @@ fn get_type_name(ty: &Type) -> Result<Ident> {
                         Err(Error::new(
                             ty.span(),
                             format!(
-                                "Expected a type, got {}",
+                                "Expected a type, got `{}`",
                                 last_segment.arguments.to_token_stream()
                             ),
                         ))
@@ -382,7 +385,7 @@ fn get_type_name(ty: &Type) -> Result<Ident> {
                     Err(Error::new(
                         ty.span(),
                         format!(
-                            "Expected <GENERIC_ARGS>, got {}",
+                            "Expected <GENERIC_ARGS>, got `{}`",
                             last_segment.arguments.to_token_stream()
                         ),
                     ))
@@ -393,7 +396,7 @@ fn get_type_name(ty: &Type) -> Result<Ident> {
         }
         _ => Err(Error::new(
             ty.span(),
-            format!("Not supported here: {}", ty.into_token_stream()),
+            format!("Not supported here: `{}`", ty.into_token_stream()),
         )),
     }
 }
