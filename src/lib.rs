@@ -279,7 +279,7 @@ fn generate_inner(
         .collect();
 
     parse_quote! {
-        #[allow(non_camel_case_types)]
+        #[allow(non_camel_case_types, non_snake_case)]
         struct #inner_name<V> {
             #(#typed_fields)*
         }
@@ -313,11 +313,9 @@ fn generate_inner(
 
 fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_macro2::TokenStream {
     let field_name = format_ident!("map_{}", variant.name.as_ref().unwrap_or(key_name));
-    if variant.fields.is_empty() {
+    let field_ty = if variant.fields.is_empty() {
         // unit variant
-        quote! {
-            #field_name: Option<V>,
-        }
+        quote!(Option<V>)
     } else {
         // variant has at least one payload field
         let mut field_ty = quote!(V);
@@ -338,9 +336,10 @@ fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_ma
             };
             is_indirect |= field.is_map_ty_indirect;
         }
-        quote! {
-            #field_name: #field_ty,
-        }
+        field_ty
+    };
+    quote! {
+        #field_name: #field_ty,
     }
 }
 
