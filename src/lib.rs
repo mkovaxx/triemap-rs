@@ -28,7 +28,7 @@ fn trie_map_impl(args: Args, key: DeriveInput) -> Result<proc_macro::TokenStream
         None => {
             return Err(Error::new(
                 args.span,
-                format!("the type mapping must contain an entry for {}", key_name,),
+                format!("The type mapping must contain an entry for `{}`", key_name,),
             ))
         }
     };
