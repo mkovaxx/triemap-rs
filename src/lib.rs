@@ -91,6 +91,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
 
                 key_variants.push(KeyVariant {
                     name: Some(variant.ident.clone()),
+                    fields: variant.fields.clone(),
                     field_types,
                 });
             }
@@ -277,6 +278,7 @@ fn generate_wrapper(
 struct KeyVariant {
     // We treat a struct as an enum with a single variant that has no name
     name: Option<Ident>,
+    fields: syn::Fields,
     field_types: Vec<KeyVariantFieldType>,
 }
 
@@ -306,7 +308,7 @@ fn generate_inner(
     let variant_gets: Vec<proc_macro2::TokenStream> = variants
         .iter()
         .map(|variant| {
-            let variant_pattern = generate_variant_pattern(key_name, variant);
+            let (variant_pattern, field_names) = generate_variant_pattern(key_name, variant);
             quote!(#variant_pattern => todo!(),)
         })
         .collect();
@@ -358,13 +360,42 @@ fn generate_variant_field_name(key_name: &Ident, variant_name: &Option<Ident>) -
     format_ident!("map_{}", variant_name.as_ref().unwrap_or(key_name))
 }
 
-fn generate_variant_pattern(key_name: &Ident, variant: &KeyVariant) -> proc_macro2::TokenStream {
+fn generate_variant_pattern(
+    key_name: &Ident,
+    variant: &KeyVariant,
+) -> (proc_macro2::TokenStream, Vec<Ident>) {
     let variant_name = match &variant.name {
         Some(name) => quote!(#key_name::#name),
         None => quote!(#key_name),
     };
-    quote! {
-        #variant_name { .. }
+
+    match &variant.fields {
+        syn::Fields::Named(fields) => {
+            let field_names: Vec<_> = fields
+                .named
+                .iter()
+                .map(|field| format_ident!("f_{}", field.ident.as_ref().unwrap()))
+                .collect();
+            let pattern = quote! {
+                #variant_name { #(#field_names,)* }
+            };
+            (pattern, field_names)
+        }
+        syn::Fields::Unnamed(fields) => {
+            let field_names: Vec<_> = (0..fields.unnamed.len())
+                .map(|i| format_ident!("f_{}", i))
+                .collect();
+            let pattern = quote! {
+                #variant_name( #(#field_names,)* )
+            };
+            (pattern, field_names)
+        }
+        syn::Fields::Unit => {
+            let pattern = quote! {
+                #variant_name
+            };
+            (pattern, vec![])
+        }
     }
 }
 
