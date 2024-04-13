@@ -282,10 +282,13 @@ struct KeyVariant {
     field_types: Vec<KeyVariantFieldType>,
 }
 
+#[derive(Clone)]
 struct KeyVariantFieldType {
     map_ty: Ident,
     is_map_ty_indirect: bool,
 }
+
+type TypedField = (Ident, KeyVariantFieldType);
 
 fn generate_inner(
     key_name: &Ident,
@@ -294,7 +297,10 @@ fn generate_inner(
 ) -> proc_macro2::TokenStream {
     let typed_fields: Vec<proc_macro2::TokenStream> = variants
         .iter()
-        .map(|variant| generate_variant_map_field(key_name, variant))
+        .map(|variant| {
+            let field_name = generate_variant_field_name(key_name, &variant.name);
+            generate_variant_map_field(&field_name, &variant.field_types)
+        })
         .collect();
 
     let field_inits: Vec<proc_macro2::TokenStream> = variants
@@ -308,8 +314,10 @@ fn generate_inner(
     let variant_gets: Vec<proc_macro2::TokenStream> = variants
         .iter()
         .map(|variant| {
-            let (variant_pattern, field_names) = generate_variant_pattern(key_name, variant);
-            quote!(#variant_pattern => todo!(),)
+            let (variant_pattern, typed_fields) = generate_variant_pattern(key_name, variant);
+            let field_name = generate_variant_field_name(key_name, &variant.name);
+            let variant_getter = generate_variant_getter(&field_name, &typed_fields);
+            quote!(#variant_pattern => #variant_getter)
         })
         .collect();
 
@@ -363,7 +371,7 @@ fn generate_variant_field_name(key_name: &Ident, variant_name: &Option<Ident>) -
 fn generate_variant_pattern(
     key_name: &Ident,
     variant: &KeyVariant,
-) -> (proc_macro2::TokenStream, Vec<Ident>) {
+) -> (proc_macro2::TokenStream, Vec<TypedField>) {
     let variant_name = match &variant.name {
         Some(name) => quote!(#key_name::#name),
         None => quote!(#key_name),
@@ -379,7 +387,11 @@ fn generate_variant_pattern(
             let pattern = quote! {
                 #variant_name { #(#field_names,)* }
             };
-            (pattern, field_names)
+            let typed_fields = field_names
+                .into_iter()
+                .zip(variant.field_types.iter().cloned())
+                .collect();
+            (pattern, typed_fields)
         }
         syn::Fields::Unnamed(fields) => {
             let field_names: Vec<_> = (0..fields.unnamed.len())
@@ -388,7 +400,11 @@ fn generate_variant_pattern(
             let pattern = quote! {
                 #variant_name( #(#field_names,)* )
             };
-            (pattern, field_names)
+            let typed_fields = field_names
+                .into_iter()
+                .zip(variant.field_types.iter().cloned())
+                .collect();
+            (pattern, typed_fields)
         }
         syn::Fields::Unit => {
             let pattern = quote! {
@@ -399,33 +415,77 @@ fn generate_variant_pattern(
     }
 }
 
-fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_macro2::TokenStream {
-    let field_name = generate_variant_field_name(key_name, &variant.name);
-    let field_ty = if variant.field_types.is_empty() {
+fn generate_variant_getter(
+    map_name: &Ident,
+    typed_fields: &Vec<TypedField>,
+) -> proc_macro2::TokenStream {
+    if typed_fields.is_empty() {
+        quote! {
+            {
+                self.#map_name.as_ref()
+            }
+        }
+    } else {
+        let mut steps: Vec<proc_macro2::TokenStream> = vec![quote! {
+            let v_0 = &self.#map_name;
+        }];
+
+        for (i, (field_name, field_ty)) in typed_fields.iter().enumerate() {
+            let v_prev = format_ident!("v_{}", i);
+            let v_curr = format_ident!("v_{}", i + 1);
+            if field_ty.is_map_ty_indirect {
+                let k_curr = format_ident!("k_{}", i + 1);
+                steps.push(quote! {
+                    let #k_curr = #v_prev.0.get(#field_name)?;
+                    let #v_curr = &#v_prev.1[*#k_curr];
+                });
+            } else {
+                steps.push(quote! {
+                    let #v_curr = #v_prev.get(#field_name)?;
+                });
+            }
+        }
+
+        let v_last = format_ident!("v_{}", typed_fields.len());
+
+        quote! {
+            {
+                #(#steps)*
+                Some(#v_last)
+            }
+        }
+    }
+}
+
+fn generate_variant_map_field(
+    map_name: &Ident,
+    field_types: &Vec<KeyVariantFieldType>,
+) -> proc_macro2::TokenStream {
+    let map_ty = if field_types.is_empty() {
         // unit variant
         quote!(Option<V>)
     } else {
         // variant has at least one payload field
-        let mut field_ty = quote!(V);
-        for field in variant.field_types.iter().rev() {
-            let map_ty = &field.map_ty;
-            field_ty = if field.is_map_ty_indirect {
+        let mut ty = quote!(V);
+        for field_ty in field_types.iter().rev() {
+            let map_ty = &field_ty.map_ty;
+            ty = if field_ty.is_map_ty_indirect {
                 // when indirection is required, we use this other pattern
                 quote! {
                     (
                         #map_ty<slotmap::DefaultKey>,
-                        slotmap::SlotMap<slotmap::DefaultKey, #field_ty>,
+                        slotmap::SlotMap<slotmap::DefaultKey, #ty>,
                     )
                 }
             } else {
                 // this is the simply nested case
-                quote!(#map_ty<#field_ty>)
+                quote!(#map_ty<#ty>)
             };
         }
-        field_ty
+        ty
     };
     quote! {
-        #field_name: #field_ty,
+        #map_name: #map_ty,
     }
 }
 
