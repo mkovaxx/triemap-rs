@@ -56,7 +56,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
         Data::Enum(enum_data) => {
             let mut key_variants = vec![];
             for variant in &enum_data.variants {
-                let mut fields = vec![];
+                let mut field_types = vec![];
 
                 for field in &variant.fields {
                     let field_ty_name = get_type_name(&field.ty)?;
@@ -72,8 +72,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
                             ))
                         }
                     };
-                    fields.push(KeyVariantField {
-                        name: field.ident.clone(),
+                    field_types.push(KeyVariantFieldType {
                         map_ty: entry.name.clone(),
                         is_map_ty_indirect: entry.is_indirect,
                     });
@@ -84,7 +83,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
                 //     - its own type is indirect, and
                 //     - it has any field after it whose type is indirect
                 let mut has_nested_indirect = false;
-                for field in fields.iter_mut().rev() {
+                for field in field_types.iter_mut().rev() {
                     let tmp = field.is_map_ty_indirect;
                     field.is_map_ty_indirect &= has_nested_indirect;
                     has_nested_indirect |= tmp;
@@ -92,7 +91,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
 
                 key_variants.push(KeyVariant {
                     name: Some(variant.ident.clone()),
-                    fields,
+                    field_types,
                 });
             }
             Ok(key_variants)
@@ -278,11 +277,10 @@ fn generate_wrapper(
 struct KeyVariant {
     // We treat a struct as an enum with a single variant that has no name
     name: Option<Ident>,
-    fields: Vec<KeyVariantField>,
+    field_types: Vec<KeyVariantFieldType>,
 }
 
-struct KeyVariantField {
-    name: Option<Ident>,
+struct KeyVariantFieldType {
     map_ty: Ident,
     is_map_ty_indirect: bool,
 }
@@ -302,6 +300,14 @@ fn generate_inner(
         .map(|variant| {
             let field_name = generate_variant_field_name(key_name, &variant.name);
             quote!(#field_name: std::default::Default::default(),)
+        })
+        .collect();
+
+    let variant_gets: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let variant_pattern = generate_variant_pattern(key_name, variant);
+            quote!(#variant_pattern => todo!(),)
         })
         .collect();
 
@@ -325,7 +331,9 @@ fn generate_inner(
             }
 
             pub fn get(&self, key: &#key_name) -> Option<&V> {
-                todo!()
+                match key {
+                    #(#variant_gets)*
+                }
             }
 
             pub fn insert(&mut self, key: #key_name, value: V) {
@@ -350,15 +358,25 @@ fn generate_variant_field_name(key_name: &Ident, variant_name: &Option<Ident>) -
     format_ident!("map_{}", variant_name.as_ref().unwrap_or(key_name))
 }
 
+fn generate_variant_pattern(key_name: &Ident, variant: &KeyVariant) -> proc_macro2::TokenStream {
+    let variant_name = match &variant.name {
+        Some(name) => quote!(#key_name::#name),
+        None => quote!(#key_name),
+    };
+    quote! {
+        #variant_name { .. }
+    }
+}
+
 fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_macro2::TokenStream {
     let field_name = generate_variant_field_name(key_name, &variant.name);
-    let field_ty = if variant.fields.is_empty() {
+    let field_ty = if variant.field_types.is_empty() {
         // unit variant
         quote!(Option<V>)
     } else {
         // variant has at least one payload field
         let mut field_ty = quote!(V);
-        for field in variant.fields.iter().rev() {
+        for field in variant.field_types.iter().rev() {
             let map_ty = &field.map_ty;
             field_ty = if field.is_map_ty_indirect {
                 // when indirection is required, we use this other pattern
