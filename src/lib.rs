@@ -167,6 +167,12 @@ fn generate_wrapper(
             Many(Box<#inner_name<V>>),
         }
 
+        impl<V> std::default::Default for #wrapper_name<V> {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl<V> #wrapper_name<V> {
             pub fn new() -> Self {
                 Self::Empty
@@ -291,15 +297,31 @@ fn generate_inner(
         .map(|variant| generate_variant_map_field(key_name, variant))
         .collect();
 
+    let field_inits: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let field_name = generate_variant_field_name(key_name, &variant.name);
+            quote!(#field_name: std::default::Default::default(),)
+        })
+        .collect();
+
     parse_quote! {
         #[allow(non_camel_case_types, non_snake_case)]
         struct #inner_name<V> {
             #(#typed_fields)*
         }
 
+        impl<V> std::default::Default for #inner_name<V> {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl<V> #inner_name<V> {
             pub fn new() -> Self {
-                todo!()
+                Self {
+                    #(#field_inits)*
+                }
             }
 
             pub fn get(&self, key: &#key_name) -> Option<&V> {
@@ -324,8 +346,12 @@ fn generate_inner(
     }
 }
 
+fn generate_variant_field_name(key_name: &Ident, variant_name: &Option<Ident>) -> Ident {
+    format_ident!("map_{}", variant_name.as_ref().unwrap_or(key_name))
+}
+
 fn generate_variant_map_field(key_name: &Ident, variant: &KeyVariant) -> proc_macro2::TokenStream {
-    let field_name = format_ident!("map_{}", variant.name.as_ref().unwrap_or(key_name));
+    let field_name = generate_variant_field_name(key_name, &variant.name);
     let field_ty = if variant.fields.is_empty() {
         // unit variant
         quote!(Option<V>)
