@@ -4,7 +4,7 @@ use proc_macro2::Span;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input, parse_quote,
+    parse_macro_input,
     punctuated::Punctuated,
     spanned::Spanned,
     Data, DeriveInput, Error, GenericArgument, Ident, PathArguments, Result, Token, Type,
@@ -159,7 +159,7 @@ fn generate_wrapper(
     wrapper_name: &Ident,
     inner_name: &Ident,
 ) -> proc_macro2::TokenStream {
-    parse_quote! {
+    quote! {
         pub enum #wrapper_name<V> {
             Empty,
             One(#key_name, V),
@@ -311,7 +311,7 @@ fn generate_inner(
         })
         .collect();
 
-    parse_quote! {
+    quote! {
         #[allow(non_camel_case_types, non_snake_case)]
         struct #inner_name<V> {
             #(#typed_fields)*
