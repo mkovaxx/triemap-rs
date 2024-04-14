@@ -311,13 +311,23 @@ fn generate_inner(
         })
         .collect();
 
-    let variant_gets: Vec<proc_macro2::TokenStream> = variants
+    let variant_getters: Vec<proc_macro2::TokenStream> = variants
         .iter()
         .map(|variant| {
             let (variant_pattern, typed_fields) = generate_variant_pattern(key_name, variant);
             let field_name = generate_variant_field_name(key_name, &variant.name);
             let variant_getter = generate_variant_getter(&field_name, &typed_fields);
             quote!(#variant_pattern => #variant_getter)
+        })
+        .collect();
+
+    let variant_removers: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let (variant_pattern, typed_fields) = generate_variant_pattern(key_name, variant);
+            let field_name = generate_variant_field_name(key_name, &variant.name);
+            let variant_remover = generate_variant_remover(&field_name, &typed_fields);
+            quote!(#variant_pattern => #variant_remover)
         })
         .collect();
 
@@ -342,7 +352,7 @@ fn generate_inner(
 
             pub fn get(&self, key: &#key_name) -> Option<&V> {
                 match key {
-                    #(#variant_gets)*
+                    #(#variant_getters)*
                 }
             }
 
@@ -351,7 +361,9 @@ fn generate_inner(
             }
 
             pub fn remove(&mut self, key: &#key_name) -> Option<V> {
-                todo!()
+                match key {
+                    #(#variant_removers)*
+                }
             }
 
             pub fn merge_with<F>(&mut self, that: Self, func: &mut F)
@@ -442,6 +454,48 @@ fn generate_variant_getter(
             } else {
                 steps.push(quote! {
                     let #v_curr = #v_prev.get(#field_name)?;
+                });
+            }
+        }
+
+        let v_last = format_ident!("v_{}", typed_fields.len());
+
+        quote! {
+            {
+                #(#steps)*
+                Some(#v_last)
+            }
+        }
+    }
+}
+
+fn generate_variant_remover(
+    map_name: &Ident,
+    typed_fields: &Vec<TypedField>,
+) -> proc_macro2::TokenStream {
+    if typed_fields.is_empty() {
+        quote! {
+            {
+                self.#map_name.take()
+            }
+        }
+    } else {
+        let mut steps: Vec<proc_macro2::TokenStream> = vec![quote! {
+            let mut v_0 = &mut self.#map_name;
+        }];
+
+        for (i, (field_name, field_ty)) in typed_fields.iter().enumerate() {
+            let v_prev = format_ident!("v_{}", i);
+            let v_curr = format_ident!("v_{}", i + 1);
+            if field_ty.is_map_ty_indirect {
+                let k_curr = format_ident!("k_{}", i + 1);
+                steps.push(quote! {
+                    let mut #k_curr = #v_prev.0.remove(&#field_name)?;
+                    let mut #v_curr = #v_prev.1.remove(#k_curr).unwrap();
+                });
+            } else {
+                steps.push(quote! {
+                    let mut #v_curr = #v_prev.remove(&#field_name)?;
                 });
             }
         }
