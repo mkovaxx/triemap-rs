@@ -26,7 +26,12 @@ pub fn trie_map_impl(args: TrieMapArgs, key: DeriveInput) -> Result<proc_macro::
     let key_variants = get_key_variants(&key, &args.type_map)?;
 
     let wrapper = generate_wrapper(key_name, wrapper_name, &inner_name);
-    let inner = generate_inner(key_name, key_variants, &inner_name);
+    let inner = generate_inner(
+        key_name,
+        &key_variants,
+        &inner_name,
+        &args.merge_with_trait_name,
+    );
 
     Ok(quote! {
         #key
@@ -90,6 +95,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
 }
 
 pub struct TrieMapArgs {
+    merge_with_trait_name: Ident,
     type_map: TypeMap,
     span: Span,
 }
@@ -103,6 +109,8 @@ struct TypeMapEntry {
 
 impl Parse for TrieMapArgs {
     fn parse(input: ParseStream) -> Result<Self> {
+        let merge_with_trait_name = input.parse::<Ident>()?;
+        let _ = input.parse::<Token![,]>()?;
         let entries = Punctuated::<TypeMapArg, Token![,]>::parse_terminated(input)?;
         let type_map = entries
             .into_iter()
@@ -117,6 +125,7 @@ impl Parse for TrieMapArgs {
             })
             .collect();
         Ok(TrieMapArgs {
+            merge_with_trait_name,
             type_map,
             span: input.span(),
         })
@@ -229,34 +238,43 @@ fn generate_wrapper(
                     }
                 }
             }
+        }
 
-            pub fn merge_with<F>(&mut self, that: Self, func: &mut F)
-            where
-                F: FnMut(&mut V, V),
-            {
+        impl<V> MergeWith<Self> for #wrapper_name<V> {
+            type Value = V;
+
+            fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
                 // an offering to the Borrow Checker
                 let mut old_self = Self::Empty;
                 std::mem::swap(self, &mut old_self);
 
-                match old_self {
-                    Self::Empty => {
+                match (old_self, that) {
+                    (Self::Empty, that) => {
                         *self = that;
                     }
-                    Self::One(key, value) => {
-                        *self = that;
-                        self.insert(key, value);
+                    (old_self, Self::Empty) => {
+                        *self = old_self;
                     }
-                    Self::Many(mut em) => match that {
-                        Self::Empty => {}
-                        Self::One(key, value) => {
-                            em.insert(key, value);
-                            *self = Self::Many(em);
-                        }
-                        Self::Many(em_that) => {
-                            em.merge_with(*em_that, func);
-                            *self = Self::Many(em);
-                        }
-                    },
+                    (Self::One(k1, v1), Self::One(k2, v2)) => {
+                        let mut m1 = Many_ExprMap::single(k1, v1);
+                        let m2 = Many_ExprMap::single(k2, v2);
+                        m1.merge_with(m2, func);
+                        *self = Self::Many(Box::new(m1));
+                    }
+                    (Self::Many(mut m1), Self::One(k2, v2)) => {
+                        let m2 = Many_ExprMap::single(k2, v2);
+                        m1.merge_with(m2, func);
+                        *self = Self::Many(m1);
+                    }
+                    (Self::One(k1, v1), Self::Many(m2)) => {
+                        let mut m1 = Many_ExprMap::single(k1, v1);
+                        m1.merge_with(*m2, func);
+                        *self = Self::Many(Box::new(m1));
+                    }
+                    (Self::Many(mut m1), Self::Many(m2)) => {
+                        m1.merge_with(*m2, func);
+                        *self = Self::Many(m1);
+                    }
                 }
             }
         }
@@ -280,8 +298,9 @@ type TypedField = (Ident, KeyVariantFieldType);
 
 fn generate_inner(
     key_name: &Ident,
-    variants: Vec<KeyVariant>,
+    variants: &[KeyVariant],
     inner_name: &Ident,
+    merge_with_trait_name: &Ident,
 ) -> proc_macro2::TokenStream {
     let typed_fields: Vec<proc_macro2::TokenStream> = variants
         .iter()
@@ -319,6 +338,11 @@ fn generate_inner(
         })
         .collect();
 
+    let field_merges = variants.iter().map(|variant| {
+        let field_name = generate_variant_field_name(key_name, &variant.name);
+        quote!(self.#field_name.merge_with(that.#field_name, func);)
+    });
+
     quote! {
         #[allow(non_camel_case_types, non_snake_case)]
         struct #inner_name<V> {
@@ -338,6 +362,10 @@ fn generate_inner(
                 }
             }
 
+            pub fn single(key: #key_name, value: V) -> Self {
+                todo!()
+            }
+
             pub fn get(&self, key: &#key_name) -> Option<&V> {
                 match key {
                     #(#variant_getters)*
@@ -345,6 +373,7 @@ fn generate_inner(
             }
 
             pub fn insert(&mut self, key: #key_name, value: V) {
+                // NOTE(mkovaxx): Implement as merge_with to be able to support in-place updates
                 todo!()
             }
 
@@ -353,12 +382,28 @@ fn generate_inner(
                     #(#variant_removers)*
                 }
             }
+        }
 
-            pub fn merge_with<F>(&mut self, that: Self, func: &mut F)
-            where
-                F: FnMut(&mut V, V),
-            {
-                todo!()
+        impl<V> #merge_with_trait_name<Self> for #inner_name<V> {
+            type Value = V;
+            fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
+                #(#field_merges)*
+            }
+        }
+
+        // MergeWith for "factored map"
+        impl<M> MergeWith<Self> for (ExprMap<slotmap::DefaultKey>, slotmap::SlotMap<slotmap::DefaultKey, M>)
+        where
+            M: MergeWith<M>,
+        {
+            type Value = M::Value;
+
+            fn merge_with(&mut self, mut that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
+                self.0.merge_with(that.0, &mut |v, w| {
+                    let m1 = &mut self.1[*v];
+                    let m2 = that.1.remove(w).unwrap();
+                    m1.merge_with(m2, func);
+                });
             }
         }
     }

@@ -3,6 +3,8 @@ use syn::{parse_macro_input, DeriveInput, Ident};
 
 mod trie_map;
 
+/// Generates the trait used for merging maps
+// TODO(mkovaxx): Extend to the entire map API (get, insert, remove, etc.)
 #[proc_macro]
 pub fn merge_with_trait(attr: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let name = parse_macro_input!(attr as Ident);
