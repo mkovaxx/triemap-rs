@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
-use triemap::trie_map;
+use triemap::{merge_with_trait, trie_map};
 
 type UsizeMap<V> = HashMap<usize, V>;
+
+merge_with_trait!(MergeWith);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[trie_map(Expr -> *ExprMap, usize -> UsizeMap)]
