@@ -191,7 +191,7 @@ fn generate_wrapper(
 
             pub fn insert(&mut self, key: #key_name, value: V) {
                 // an offering to the Borrow Checker
-                let mut old_self = #wrapper_name::Empty;
+                let mut old_self = Self::Empty;
                 std::mem::swap(self, &mut old_self);
 
                 match old_self {
@@ -256,18 +256,18 @@ fn generate_wrapper(
                         *self = old_self;
                     }
                     (Self::One(k1, v1), Self::One(k2, v2)) => {
-                        let mut m1 = Many_ExprMap::single(k1, v1);
-                        let m2 = Many_ExprMap::single(k2, v2);
+                        let mut m1 = #inner_name::single(k1, v1);
+                        let m2 = #inner_name::single(k2, v2);
                         m1.merge_with(m2, func);
                         *self = Self::Many(Box::new(m1));
                     }
                     (Self::Many(mut m1), Self::One(k2, v2)) => {
-                        let m2 = Many_ExprMap::single(k2, v2);
+                        let m2 = #inner_name::single(k2, v2);
                         m1.merge_with(m2, func);
                         *self = Self::Many(m1);
                     }
                     (Self::One(k1, v1), Self::Many(m2)) => {
-                        let mut m1 = Many_ExprMap::single(k1, v1);
+                        let mut m1 = #inner_name::single(k1, v1);
                         m1.merge_with(*m2, func);
                         *self = Self::Many(Box::new(m1));
                     }
@@ -276,6 +276,22 @@ fn generate_wrapper(
                         *self = Self::Many(m1);
                     }
                 }
+            }
+        }
+
+        // MergeWith for "factored map"
+        impl<M> MergeWith<Self> for (#wrapper_name<slotmap::DefaultKey>, slotmap::SlotMap<slotmap::DefaultKey, M>)
+        where
+            M: MergeWith<M>,
+        {
+            type Value = M::Value;
+
+            fn merge_with(&mut self, mut that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
+                self.0.merge_with(that.0, &mut |v, w| {
+                    let m1 = &mut self.1[*v];
+                    let m2 = that.1.remove(w).unwrap();
+                    m1.merge_with(m2, func);
+                });
             }
         }
     }
@@ -388,22 +404,6 @@ fn generate_inner(
             type Value = V;
             fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
                 #(#field_merges)*
-            }
-        }
-
-        // MergeWith for "factored map"
-        impl<M> MergeWith<Self> for (ExprMap<slotmap::DefaultKey>, slotmap::SlotMap<slotmap::DefaultKey, M>)
-        where
-            M: MergeWith<M>,
-        {
-            type Value = M::Value;
-
-            fn merge_with(&mut self, mut that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
-                self.0.merge_with(that.0, &mut |v, w| {
-                    let m1 = &mut self.1[*v];
-                    let m2 = that.1.remove(w).unwrap();
-                    m1.merge_with(m2, func);
-                });
             }
         }
     }
