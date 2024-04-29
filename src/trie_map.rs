@@ -384,7 +384,8 @@ fn generate_inner(
             }
 
             fn insert_with(&mut self, key: #key_name, value: V, func: &mut dyn FnMut(&mut V, V)) {
-                todo!()
+                // NOTE(mkovaxx): Could be specialized for some performance gain?
+                self.merge_with(Self::one(key, value), func);
             }
 
             fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut V, V)) {
