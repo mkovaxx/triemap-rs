@@ -5,7 +5,7 @@ mod trie_map;
 
 /// Makes a fresh trait that unifies map-like things
 #[proc_macro]
-pub fn make_fresh_map_trait(args: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn declare_map_trait(args: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let name = parse_macro_input!(args as Ident);
     quote! {
         trait #name {

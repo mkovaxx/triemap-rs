@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use triemap::{make_fresh_map_trait, trie_map};
+use triemap::{declare_map_trait, trie_map};
 
 type UsizeMap<V> = HashMap<usize, V>;
 
-make_fresh_map_trait!(Map);
+declare_map_trait!(Map);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[trie_map(Map, Expr -> *ExprMap, usize -> UsizeMap)]
