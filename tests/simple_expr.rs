@@ -115,12 +115,12 @@ impl<V> Map for Option<V> {
 
 #[test]
 fn test_map_type_exists() {
-    let tm: ExprMap<char> = ExprMap::new();
+    let tm: ExprMap<char> = ExprMap::empty();
 }
 
 #[test]
 fn test_insert_then_get() {
-    let mut tm: ExprMap<char> = ExprMap::new();
+    let mut tm: ExprMap<char> = ExprMap::empty();
 
     let key = Expr::App(Expr::Var(0).into(), 42, Expr::Var(1).into());
     let value = 'v';
@@ -131,7 +131,7 @@ fn test_insert_then_get() {
 
 #[test]
 fn test_insert_multi_then_get() {
-    let mut tm: ExprMap<char> = ExprMap::new();
+    let mut tm: ExprMap<char> = ExprMap::empty();
 
     let key = Expr::App(Expr::Var(0).into(), 42, Expr::Var(1).into());
     let value = 'v';

@@ -16,7 +16,7 @@ pub fn trie_map_impl(args: TrieMapArgs, key: DeriveInput) -> Result<proc_macro::
         None => {
             return Err(Error::new(
                 args.span,
-                format!("The type mapping must contain an entry for `{}`", key_name,),
+                format!("The type mapping must contain an entry for `{}`", key_name),
             ))
         }
     };
@@ -25,13 +25,8 @@ pub fn trie_map_impl(args: TrieMapArgs, key: DeriveInput) -> Result<proc_macro::
 
     let key_variants = get_key_variants(&key, &args.type_map)?;
 
-    let wrapper = generate_wrapper(key_name, wrapper_name, &inner_name);
-    let inner = generate_inner(
-        key_name,
-        &key_variants,
-        &inner_name,
-        &args.merge_with_trait_name,
-    );
+    let wrapper = generate_wrapper(&args.map_trait_name, key_name, wrapper_name, &inner_name);
+    let inner = generate_inner(&args.map_trait_name, key_name, &key_variants, &inner_name);
 
     Ok(quote! {
         #key
@@ -95,7 +90,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
 }
 
 pub struct TrieMapArgs {
-    merge_with_trait_name: Ident,
+    map_trait_name: Ident,
     type_map: TypeMap,
     span: Span,
 }
@@ -109,7 +104,7 @@ struct TypeMapEntry {
 
 impl Parse for TrieMapArgs {
     fn parse(input: ParseStream) -> Result<Self> {
-        let merge_with_trait_name = input.parse::<Ident>()?;
+        let map_trait_name = input.parse::<Ident>()?;
         let _ = input.parse::<Token![,]>()?;
         let entries = Punctuated::<TypeMapArg, Token![,]>::parse_terminated(input)?;
         let type_map = entries
@@ -125,7 +120,7 @@ impl Parse for TrieMapArgs {
             })
             .collect();
         Ok(TrieMapArgs {
-            merge_with_trait_name,
+            map_trait_name,
             type_map,
             span: input.span(),
         })
@@ -153,6 +148,7 @@ impl Parse for TypeMapArg {
 }
 
 fn generate_wrapper(
+    map_trait_name: &Ident,
     key_name: &Ident,
     wrapper_name: &Ident,
     inner_name: &Ident,
@@ -164,18 +160,19 @@ fn generate_wrapper(
             Many(Box<#inner_name<V>>),
         }
 
-        impl<V> std::default::Default for #wrapper_name<V> {
-            fn default() -> Self {
-                Self::new()
-            }
-        }
+        impl<V> #map_trait_name for #wrapper_name<V> {
+            type K = #key_name;
+            type V = V;
 
-        impl<V> #wrapper_name<V> {
-            pub fn new() -> Self {
+            fn empty() -> Self {
                 Self::Empty
             }
 
-            pub fn get(&self, key: &#key_name) -> Option<&V> {
+            fn one(key: #key_name, value: V) -> Self {
+                Self::One(key, value)
+            }
+
+            fn get(&self, key: &#key_name) -> Option<&V> {
                 match self {
                     Self::Empty => None,
                     Self::One(k, value) => {
@@ -185,13 +182,37 @@ fn generate_wrapper(
                             None
                         }
                     }
-                    Self::Many(em) => em.get(key),
+                    Self::Many(m) => m.get(key),
                 }
             }
 
-            pub fn insert(&mut self, key: #key_name, value: V) {
-                // an offering to the Borrow Checker
-                let mut old_self = Self::Empty;
+            fn remove(&mut self, key: &#key_name) -> Option<V> {
+                // a humble offering to the Borrow Checker, Keeper of Lifetimes
+                let mut old_self = Self::empty();
+                std::mem::swap(self, &mut old_self);
+
+                match old_self {
+                    Self::Empty => None,
+                    Self::One(k, value) => {
+                        if k == *key {
+                            Some(value)
+                        } else {
+                            *self = Self::One(k, value);
+                            None
+                        }
+                    }
+                    Self::Many(mut m) => {
+                        let value = m.remove(key);
+                        // TODO: collapse into Self::One when possible
+                        *self = Self::Many(m);
+                        value
+                    }
+                }
+            }
+
+            fn insert_with(&mut self, key: #key_name, value: V, func: &mut dyn FnMut(&mut V, V)) {
+                // a humble offering to the Borrow Checker, Keeper of Lifetimes
+                let mut old_self = Self::empty();
                 std::mem::swap(self, &mut old_self);
 
                 match old_self {
@@ -199,53 +220,20 @@ fn generate_wrapper(
                         *self = Self::One(key, value);
                     }
                     Self::One(k, v) => {
-                        let mut em = Box::new(#inner_name::new());
-                        em.insert(k, v);
-                        em.insert(key, value);
-                        *self = Self::Many(em);
+                        let mut m = Box::new(#inner_name::one(k, v));
+                        m.insert_with(key, value, func);
+                        *self = Self::Many(m);
                     }
-                    Self::Many(mut em) => {
-                        em.insert(key, value);
-                        *self = Self::Many(em);
-                    }
-                }
-            }
-
-            pub fn remove(&mut self, key: &#key_name) -> Option<V> {
-                // an offering to the Borrow Checker
-                let mut old_self = Self::Empty;
-                std::mem::swap(self, &mut old_self);
-
-                match old_self {
-                    Self::Empty => {
-                        *self = Self::Empty;
-                        None
-                    }
-                    Self::One(k, value) => {
-                        if k == *key {
-                            *self = Self::Empty;
-                            Some(value)
-                        } else {
-                            *self = Self::One(k, value);
-                            None
-                        }
-                    }
-                    Self::Many(mut em) => {
-                        let value = em.remove(key);
-                        // TODO: collapse into One when possible
-                        *self = Self::Many(em);
-                        value
+                    Self::Many(mut m) => {
+                        m.insert_with(key, value, func);
+                        *self = Self::Many(m);
                     }
                 }
             }
-        }
 
-        impl<V> MergeWith<Self> for #wrapper_name<V> {
-            type Value = V;
-
-            fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
-                // an offering to the Borrow Checker
-                let mut old_self = Self::Empty;
+            fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut V, V)) {
+                // a humble offering to the Borrow Checker, Keeper of Lifetimes
+                let mut old_self = Self::empty();
                 std::mem::swap(self, &mut old_self);
 
                 match (old_self, that) {
@@ -256,42 +244,24 @@ fn generate_wrapper(
                         *self = old_self;
                     }
                     (Self::One(k1, v1), Self::One(k2, v2)) => {
-                        let mut m1 = #inner_name::single(k1, v1);
-                        let m2 = #inner_name::single(k2, v2);
-                        m1.merge_with(m2, func);
-                        *self = Self::Many(Box::new(m1));
+                        let mut m1 = Box::new(#inner_name::one(k1, v1));
+                        m1.insert_with(k2, v2, func);
+                        *self = Self::Many(m1);
                     }
                     (Self::Many(mut m1), Self::One(k2, v2)) => {
-                        let m2 = #inner_name::single(k2, v2);
-                        m1.merge_with(m2, func);
+                        m1.insert_with(k2, v2, func);
                         *self = Self::Many(m1);
                     }
                     (Self::One(k1, v1), Self::Many(m2)) => {
-                        let mut m1 = #inner_name::single(k1, v1);
+                        let mut m1 = Box::new(#inner_name::one(k1, v1));
                         m1.merge_with(*m2, func);
-                        *self = Self::Many(Box::new(m1));
+                        *self = Self::Many(m1);
                     }
                     (Self::Many(mut m1), Self::Many(m2)) => {
                         m1.merge_with(*m2, func);
                         *self = Self::Many(m1);
                     }
                 }
-            }
-        }
-
-        // MergeWith for "factored map"
-        impl<M> MergeWith<Self> for (#wrapper_name<slotmap::DefaultKey>, slotmap::SlotMap<slotmap::DefaultKey, M>)
-        where
-            M: MergeWith<M>,
-        {
-            type Value = M::Value;
-
-            fn merge_with(&mut self, mut that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
-                self.0.merge_with(that.0, &mut |v, w| {
-                    let m1 = &mut self.1[*v];
-                    let m2 = that.1.remove(w).unwrap();
-                    m1.merge_with(m2, func);
-                });
             }
         }
     }
@@ -313,10 +283,10 @@ struct KeyVariantFieldType {
 type TypedField = (Ident, KeyVariantFieldType);
 
 fn generate_inner(
+    map_trait_name: &Ident,
     key_name: &Ident,
     variants: &[KeyVariant],
     inner_name: &Ident,
-    merge_with_trait_name: &Ident,
 ) -> proc_macro2::TokenStream {
     let typed_fields: Vec<proc_macro2::TokenStream> = variants
         .iter()
@@ -330,7 +300,7 @@ fn generate_inner(
         .iter()
         .map(|variant| {
             let field_name = generate_variant_field_name(key_name, &variant.name);
-            quote!(#field_name: std::default::Default::default(),)
+            quote!(#field_name: #map_trait_name::empty(),)
         })
         .collect();
 
@@ -355,8 +325,10 @@ fn generate_inner(
         .collect();
 
     let field_merges = variants.iter().map(|variant| {
+        let (_, typed_fields) = generate_variant_pattern(key_name, variant);
         let field_name = generate_variant_field_name(key_name, &variant.name);
-        quote!(self.#field_name.merge_with(that.#field_name, func);)
+        let variant_merger = generate_variant_field_merger(&typed_fields);
+        quote!(self.#field_name.merge_with(that.#field_name, #variant_merger);)
     });
 
     quote! {
@@ -365,44 +337,37 @@ fn generate_inner(
             #(#typed_fields)*
         }
 
-        impl<V> std::default::Default for #inner_name<V> {
-            fn default() -> Self {
-                Self::new()
-            }
-        }
+        impl<V> #map_trait_name for #inner_name<V> {
+            type K = #key_name;
+            type V = V;
 
-        impl<V> #inner_name<V> {
-            pub fn new() -> Self {
+            fn empty() -> Self {
                 Self {
                     #(#field_inits)*
                 }
             }
 
-            pub fn single(key: #key_name, value: V) -> Self {
+            fn one(key: #key_name, value: V) -> Self {
                 todo!()
             }
 
-            pub fn get(&self, key: &#key_name) -> Option<&V> {
+            fn get(&self, key: &#key_name) -> Option<&V> {
                 match key {
                     #(#variant_getters)*
                 }
             }
 
-            pub fn insert(&mut self, key: #key_name, value: V) {
-                // NOTE(mkovaxx): Implement as merge_with to be able to support in-place updates
-                todo!()
-            }
-
-            pub fn remove(&mut self, key: &#key_name) -> Option<V> {
+            fn remove(&mut self, key: &#key_name) -> Option<V> {
                 match key {
                     #(#variant_removers)*
                 }
             }
-        }
 
-        impl<V> #merge_with_trait_name<Self> for #inner_name<V> {
-            type Value = V;
-            fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
+            fn insert_with(&mut self, key: #key_name, value: V, func: &mut dyn FnMut(&mut V, V)) {
+                todo!()
+            }
+
+            fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut V, V)) {
                 #(#field_merges)*
             }
         }
@@ -465,30 +430,18 @@ fn generate_variant_getter(
     typed_fields: &Vec<TypedField>,
 ) -> proc_macro2::TokenStream {
     if typed_fields.is_empty() {
-        quote! {
-            {
-                self.#map_name.as_ref()
-            }
-        }
+        quote!(self.#map_name.get(&()),)
     } else {
         let mut steps: Vec<proc_macro2::TokenStream> = vec![quote! {
             let v_0 = &self.#map_name;
         }];
 
-        for (i, (field_name, field_ty)) in typed_fields.iter().enumerate() {
+        for (i, (field_name, _)) in typed_fields.iter().enumerate() {
             let v_prev = format_ident!("v_{}", i);
             let v_curr = format_ident!("v_{}", i + 1);
-            if field_ty.is_map_ty_indirect {
-                let k_curr = format_ident!("k_{}", i + 1);
-                steps.push(quote! {
-                    let #k_curr = #v_prev.0.get(#field_name)?;
-                    let #v_curr = &#v_prev.1[*#k_curr];
-                });
-            } else {
-                steps.push(quote! {
-                    let #v_curr = #v_prev.get(#field_name)?;
-                });
-            }
+            steps.push(quote! {
+                let #v_curr = #v_prev.get(#field_name)?;
+            });
         }
 
         let v_last = format_ident!("v_{}", typed_fields.len());
@@ -507,30 +460,18 @@ fn generate_variant_remover(
     typed_fields: &Vec<TypedField>,
 ) -> proc_macro2::TokenStream {
     if typed_fields.is_empty() {
-        quote! {
-            {
-                self.#map_name.take()
-            }
-        }
+        quote!(self.#map_name.remove(&()),)
     } else {
         let mut steps: Vec<proc_macro2::TokenStream> = vec![quote! {
             let mut v_0 = &mut self.#map_name;
         }];
 
-        for (i, (field_name, field_ty)) in typed_fields.iter().enumerate() {
+        for (i, (field_name, _)) in typed_fields.iter().enumerate() {
             let v_prev = format_ident!("v_{}", i);
             let v_curr = format_ident!("v_{}", i + 1);
-            if field_ty.is_map_ty_indirect {
-                let k_curr = format_ident!("k_{}", i + 1);
-                steps.push(quote! {
-                    let mut #k_curr = #v_prev.0.remove(&#field_name)?;
-                    let mut #v_curr = #v_prev.1.remove(#k_curr).unwrap();
-                });
-            } else {
-                steps.push(quote! {
-                    let mut #v_curr = #v_prev.remove(&#field_name)?;
-                });
-            }
+            steps.push(quote! {
+                let mut #v_curr = #v_prev.remove(&#field_name)?;
+            });
         }
 
         let v_last = format_ident!("v_{}", typed_fields.len());
@@ -542,6 +483,16 @@ fn generate_variant_remover(
             }
         }
     }
+}
+
+fn generate_variant_field_merger(typed_fields: &[TypedField]) -> proc_macro2::TokenStream {
+    let mut merger = quote!(func);
+
+    for _ in typed_fields.iter().skip(1) {
+        merger = quote!(&mut |m1, m2| m1.merge_with(m2, #merger));
+    }
+
+    merger
 }
 
 fn generate_variant_map_field(
