@@ -47,7 +47,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
                 let mut field_types = vec![];
 
                 for field in &variant.fields {
-                    let field_ty_name = get_type_name(&field.ty)?;
+                    let (field_ty_name, is_boxed) = get_type_name(&field.ty)?;
                     let entry = match type_map.get(&field_ty_name) {
                         Some(entry) => entry,
                         None => {
@@ -62,6 +62,7 @@ fn get_key_variants(key: &DeriveInput, type_map: &TypeMap) -> Result<Vec<KeyVari
                     };
                     field_types.push(KeyVariantFieldType {
                         map_ty: entry.name.clone(),
+                        is_boxed,
                         is_map_ty_indirect: entry.is_indirect,
                     });
                 }
@@ -277,6 +278,7 @@ struct KeyVariant {
 #[derive(Clone)]
 struct KeyVariantFieldType {
     map_ty: Ident,
+    is_boxed: bool,
     is_map_ty_indirect: bool,
 }
 
@@ -301,6 +303,18 @@ fn generate_inner(
         .map(|variant| {
             let field_name = generate_variant_field_name(key_name, &variant.name);
             quote!(#field_name: #map_trait_name::empty(),)
+        })
+        .collect();
+
+    let variant_field_ones: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let (variant_pattern, typed_fields) = generate_variant_pattern(key_name, variant);
+            let field_name = generate_variant_field_name(key_name, &variant.name);
+            let field_one = generate_variant_field_one(&map_trait_name, &typed_fields);
+            quote!(#variant_pattern => {
+                m.#field_name = #field_one;
+            })
         })
         .collect();
 
@@ -348,7 +362,13 @@ fn generate_inner(
             }
 
             fn one(key: #key_name, value: V) -> Self {
-                todo!()
+                let mut m = Self::empty();
+
+                match key {
+                    #(#variant_field_ones)*
+                }
+
+                m
             }
 
             fn get(&self, key: &#key_name) -> Option<&V> {
@@ -422,6 +442,28 @@ fn generate_variant_pattern(
             };
             (pattern, vec![])
         }
+    }
+}
+
+fn generate_variant_field_one(
+    map_trait_name: &Ident,
+    typed_fields: &Vec<TypedField>,
+) -> proc_macro2::TokenStream {
+    if typed_fields.is_empty() {
+        quote!(#map_trait_name::one((), value))
+    } else {
+        let mut one = quote!(value);
+
+        for (field_name, field_ty) in typed_fields.iter().rev() {
+            let field_by_val = if field_ty.is_boxed {
+                quote!(*#field_name)
+            } else {
+                quote!(#field_name)
+            };
+            one = quote!(#map_trait_name::one(#field_by_val, #one));
+        }
+
+        one
     }
 }
 
@@ -527,7 +569,7 @@ fn generate_variant_map_field(
     }
 }
 
-fn get_type_name(ty: &Type) -> Result<Ident> {
+fn get_type_name(ty: &Type) -> Result<(Ident, bool)> {
     match ty {
         Type::Path(path) => {
             let last_segment = path.path.segments.last().unwrap();
@@ -536,7 +578,9 @@ fn get_type_name(ty: &Type) -> Result<Ident> {
                 if let PathArguments::AngleBracketed(ref args) = last_segment.arguments {
                     let args: Vec<_> = args.args.iter().collect();
                     if let [GenericArgument::Type(ty)] = &args[..] {
-                        get_type_name(ty)
+                        let (name, _) = get_type_name(ty)?;
+                        // NOTE: true = type is boxed
+                        Ok((name, true))
                     } else {
                         Err(Error::new(
                             ty.span(),
@@ -556,7 +600,8 @@ fn get_type_name(ty: &Type) -> Result<Ident> {
                     ))
                 }
             } else {
-                Ok(last_segment.ident.clone())
+                // NOTE: false = type is unboxed
+                Ok((last_segment.ident.clone(), false))
             }
         }
         _ => Err(Error::new(
