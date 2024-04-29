@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use triemap::{merge_with_trait, trie_map};
+use triemap::{make_fresh_map_trait, trie_map};
 
 type UsizeMap<V> = HashMap<usize, V>;
 
-merge_with_trait!(MergeWith);
+make_fresh_map_trait!(Map);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[trie_map(MergeWith, Expr -> *ExprMap, usize -> UsizeMap)]
+#[trie_map(Map, Expr -> *ExprMap, usize -> UsizeMap)]
 pub enum Expr {
     Zero,
     Var(usize),
@@ -16,26 +16,46 @@ pub enum Expr {
     Def(Box<Expr>),
 }
 
-impl<V> MergeWith<Self> for Option<V> {
-    type Value = V;
-
-    fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
-        match (&self, that) {
-            (None, None) => {}
-            (None, r) => *self = r,
-            (_, None) => {}
-            (Some(_), Some(r)) => func(self.as_mut().unwrap(), r)
-        }
-    }
-}
-
-impl<K, V> MergeWith<Self> for HashMap<K, V>
+impl<K, V> Map for HashMap<K, V>
 where
     K: Eq + Hash,
 {
-    type Value = V;
+    type K = K;
+    type V = V;
 
-    fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
+    fn empty() -> Self {
+        HashMap::new()
+    }
+
+    fn one(key: K, value: V) -> Self {
+        Self::from_iter([(key, value)])
+    }
+
+    fn get(&self, key: &K) -> Option<&V> {
+        self.get(key)
+    }
+
+    fn remove(&mut self, key: &K) -> Option<V> {
+        self.remove(key)
+    }
+
+    fn insert_with(
+        &mut self,
+        key: Self::K,
+        value: Self::V,
+        func: &mut dyn FnMut(&mut Self::V, Self::V),
+    ) {
+        match self.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                func(entry.get_mut(), value);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+        }
+    }
+
+    fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut V, V)) {
         for (k2, v2) in that {
             match self.entry(k2) {
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
@@ -44,6 +64,50 @@ where
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(v2);
                 }
+            }
+        }
+    }
+}
+
+impl<V> Map for Option<V> {
+    type K = ();
+    type V = V;
+
+    fn empty() -> Self {
+        None
+    }
+
+    fn one(_key: (), value: V) -> Self {
+        Some(value)
+    }
+
+    fn get(&self, _key: &()) -> Option<&V> {
+        self.as_ref()
+    }
+
+    fn remove(&mut self, _key: &()) -> Option<V> {
+        self.take()
+    }
+
+    fn insert_with(&mut self, _key: (), value: V, func: &mut dyn FnMut(&mut V, V)) {
+        match self {
+            Some(old_value) => func(old_value, value),
+            None => *self = Some(value),
+        }
+    }
+
+    fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut V, V)) {
+        // a humble offering to the Borrow Checker, Keeper of Lifetimes
+        let mut old_self = Self::empty();
+        std::mem::swap(self, &mut old_self);
+
+        match (old_self, that) {
+            (None, None) => {}
+            (None, Some(v)) => *self = Some(v),
+            (Some(v), None) => *self = Some(v),
+            (Some(mut v), Some(w)) => {
+                func(&mut v, w);
+                *self = Some(v);
             }
         }
     }
