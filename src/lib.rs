@@ -32,9 +32,9 @@ pub fn make_fresh_map_trait(args: proc_macro::TokenStream) -> proc_macro::TokenS
 
         /// Provide an impl for a map M<K, V> "factorized" as (M<K, DefaultKey>, SlotMap<DefaultKey, V>)
         /// "Factorizing" maps such as ExprMap<ExprMap<V>> avoids "recursive type overflow" in rustc
-        impl<M, V> MapApi for (M, slotmap::SlotMap<slotmap::DefaultKey, V>)
+        impl<M, V> #name for (M, slotmap::SlotMap<slotmap::DefaultKey, V>)
         where
-            M: MapApi<V = slotmap::DefaultKey>,
+            M: #name<V = slotmap::DefaultKey>,
         {
             type K = M::K;
             type V = V;
