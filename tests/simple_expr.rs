@@ -20,11 +20,11 @@ impl<V> MergeWith<Self> for Option<V> {
     type Value = V;
 
     fn merge_with(&mut self, that: Self, func: &mut dyn FnMut(&mut Self::Value, Self::Value)) {
-        match (self, that) {
+        match (&self, that) {
             (None, None) => {}
             (None, r) => *self = r,
-            (l, None) => {}
-            (Some(mut l), Some(r)) => func(&mut l, r),
+            (_, None) => {}
+            (Some(_), Some(r)) => func(self.as_mut().unwrap(), r)
         }
     }
 }
