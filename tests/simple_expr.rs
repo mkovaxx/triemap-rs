@@ -103,7 +103,7 @@ impl<V> Map for Option<V> {
 
         match (old_self, that) {
             (None, None) => {}
-            (None, Some(v)) => *self = Some(v),
+            (None, Some(v))|
             (Some(v), None) => *self = Some(v),
             (Some(mut v), Some(w)) => {
                 func(&mut v, w);
@@ -144,4 +144,17 @@ fn test_insert_multi_then_get() {
     tm.insert(key.clone(), value);
 
     assert_eq!(tm.get(&key), Some(&value));
+}
+
+#[test]
+fn test_insert_two_apps() {
+    let mut tm: ExprMap<&str> = ExprMap::empty();
+
+    let key = Expr::App(Expr::Var(0).into(), 42, Expr::Var(1).into());
+    tm.insert(key.clone(), "test");
+    assert_eq!(tm.get(&key), Some(&"test"));
+
+    let key = Expr::App(Expr::Var(2).into(), 42, Expr::Var(3).into());
+    tm.insert(key.clone(), "another_test");
+    assert_eq!(tm.get(&key), Some(&"another_test"));
 }
