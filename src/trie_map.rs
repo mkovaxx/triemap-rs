@@ -155,6 +155,7 @@ fn generate_wrapper(
     inner_name: &Ident,
 ) -> proc_macro2::TokenStream {
     quote! {
+        #[derive(Debug)]
         pub enum #wrapper_name<V> {
             Empty,
             One(#key_name, V),
@@ -346,6 +347,7 @@ fn generate_inner(
     });
 
     quote! {
+        #[derive(Debug)]
         #[allow(non_camel_case_types, non_snake_case)]
         struct #inner_name<V> {
             #(#typed_fields)*

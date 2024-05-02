@@ -158,3 +158,22 @@ fn test_insert_two_apps() {
     tm.insert(key.clone(), "another_test");
     assert_eq!(tm.get(&key), Some(&"another_test"));
 }
+
+#[test]
+fn test_factorized_map() {
+    use slotmap::{DefaultKey, SlotMap};
+
+    let mut fm: (ExprMap<DefaultKey>, SlotMap<DefaultKey, &str>) = Map::empty();
+
+    let key = Expr::App(Expr::Var(0).into(), 42, Expr::Var(1).into());
+    fm.insert(key.clone(), "test");
+    assert_eq!(fm.get(&key), Some(&"test"));
+
+    let key = Expr::App(Expr::Var(2).into(), 42, Expr::Var(3).into());
+    dbg!("BEFORE");
+    dbg!(&fm);
+    fm.insert(key.clone(), "another_test");
+    dbg!("AFTER");
+    dbg!(&fm);
+    assert_eq!(fm.get(&key), Some(&"another_test"));
+}
