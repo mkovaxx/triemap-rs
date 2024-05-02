@@ -17,6 +17,9 @@ pub fn declare_map_trait(args: proc_macro::TokenStream) -> proc_macro::TokenStre
 
             fn get(&self, key: &Self::K) -> Option<&Self::V>;
             fn remove(&mut self, key: &Self::K) -> Option<Self::V>;
+
+            fn for_each(&mut self, func: &mut dyn FnMut(&mut Self::V));
+
             fn insert_with(
                 &mut self,
                 key: Self::K,
@@ -61,10 +64,23 @@ pub fn declare_map_trait(args: proc_macro::TokenStream) -> proc_macro::TokenStre
                 Some(value)
             }
 
+            fn for_each(&mut self, func: &mut dyn FnMut(&mut V)) {
+                for (_, value) in &mut self.1 {
+                    func(value);
+                }
+            }
+
             fn merge_with(&mut self, mut that: Self, func: &mut dyn FnMut(&mut V, V)) {
+                // first move all the slots into the SlotMap of the left side
+                that.0.for_each(&mut |slot_k2| {
+                    let value2 = that.1.remove(*slot_k2).unwrap();
+                    *slot_k2 = self.1.insert(value2);
+                });
+
+                // then while merging the DefaultKey entries, only use the left SlotMap
                 self.0.merge_with(that.0, &mut |slot_k1, slot_k2| {
+                    let value2 = self.1.remove(slot_k2).unwrap();
                     let value1 = &mut self.1[*slot_k1];
-                    let value2 = that.1.remove(slot_k2).unwrap();
                     func(value1, value2);
                 });
             }

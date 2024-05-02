@@ -212,6 +212,14 @@ fn generate_wrapper(
                 }
             }
 
+            fn for_each(&mut self, func: &mut dyn FnMut(&mut V)) {
+                match self {
+                    Self::Empty => {}
+                    Self::One(_, value) => func(value),
+                    Self::Many(m) => m.for_each(func),
+                }
+            }
+
             fn insert_with(&mut self, key: #key_name, value: V, func: &mut dyn FnMut(&mut V, V)) {
                 // a humble offering to the Borrow Checker, Keeper of Lifetimes
                 let mut old_self = Self::empty();
@@ -339,6 +347,13 @@ fn generate_inner(
         })
         .collect();
 
+    let field_for_eaches = variants.iter().map(|variant| {
+        let (_, typed_fields) = generate_variant_pattern(key_name, variant);
+        let field_name = generate_variant_field_name(key_name, &variant.name);
+        let variant_for_each = generate_variant_for_each_body(&typed_fields);
+        quote!(self.#field_name.for_each(#variant_for_each);)
+    });
+
     let field_merges = variants.iter().map(|variant| {
         let (_, typed_fields) = generate_variant_pattern(key_name, variant);
         let field_name = generate_variant_field_name(key_name, &variant.name);
@@ -383,6 +398,10 @@ fn generate_inner(
                 match key {
                     #(#variant_removers)*
                 }
+            }
+
+            fn for_each(&mut self, func: &mut dyn FnMut(&mut V)) {
+                #(#field_for_eaches)*
             }
 
             fn insert_with(&mut self, key: #key_name, value: V, func: &mut dyn FnMut(&mut V, V)) {
@@ -528,6 +547,16 @@ fn generate_variant_remover(
             }
         }
     }
+}
+
+fn generate_variant_for_each_body(typed_fields: &[TypedField]) -> proc_macro2::TokenStream {
+    let mut body = quote!(func);
+
+    for _ in typed_fields.iter().skip(1) {
+        body = quote!(&mut |m| m.for_each(#body));
+    }
+
+    body
 }
 
 fn generate_variant_field_merger(typed_fields: &[TypedField]) -> proc_macro2::TokenStream {

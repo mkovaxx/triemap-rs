@@ -39,6 +39,12 @@ where
         self.remove(key)
     }
 
+    fn for_each(&mut self, func: &mut dyn FnMut(&mut Self::V)) {
+        for (_, value) in self {
+            func(value);
+        }
+    }
+
     fn insert_with(
         &mut self,
         key: Self::K,
@@ -89,6 +95,13 @@ impl<V> Map for Option<V> {
         self.take()
     }
 
+    fn for_each(&mut self, func: &mut dyn FnMut(&mut V)) {
+        match self {
+            Some(value) => func(value),
+            None => {}
+        }
+    }
+
     fn insert_with(&mut self, _key: (), value: V, func: &mut dyn FnMut(&mut V, V)) {
         match self {
             Some(old_value) => func(old_value, value),
@@ -103,8 +116,7 @@ impl<V> Map for Option<V> {
 
         match (old_self, that) {
             (None, None) => {}
-            (None, Some(v))|
-            (Some(v), None) => *self = Some(v),
+            (None, Some(v)) | (Some(v), None) => *self = Some(v),
             (Some(mut v), Some(w)) => {
                 func(&mut v, w);
                 *self = Some(v);
