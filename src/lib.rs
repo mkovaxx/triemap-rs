@@ -51,7 +51,8 @@ pub fn declare_map_trait(args: proc_macro::TokenStream) -> proc_macro::TokenStre
 
             fn get(&self, key: &M::K) -> Option<&V> {
                 let slot_k = self.0.get(key)?;
-                self.1.get(*slot_k)
+                let value = &self.1[*slot_k];
+                Some(value)
             }
 
             fn remove(&mut self, key: &M::K) -> Option<V> {
