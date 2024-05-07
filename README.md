@@ -1,4 +1,4 @@
-# triemap-rs
+# triemap
 
 Triemaps for Rust
 
