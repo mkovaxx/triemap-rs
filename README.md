@@ -1,6 +1,6 @@
 # triemap-rs
 
-TrieMaps for Rust
+Triemaps for Rust
 
 ## ⚠️ Work in Progress ⚠️
 

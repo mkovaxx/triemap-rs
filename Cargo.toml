@@ -2,6 +2,15 @@
 name = "triemap"
 version = "0.1.0"
 edition = "2021"
+authors = ["Mate Kovacs & The Triemap-rs Contributors"]
+description = "Triemaps for Rust"
+homepage = "https://github.com/mkovaxx/triemap-rs"
+repository = "https://github.com/mkovaxx/triemap-rs"
+readme = "README.md"
+license = "MIT"
+keywords = ["triemap", "macro", "map", "indexing"]
+categories = ["data-structures"]
+exclude = [".gitignore"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
